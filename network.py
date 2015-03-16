@@ -1,9 +1,27 @@
 import numpy as np
 from itertools import izip_longest
 
+np.random.seed(10)
+
 class Network:
-    def __init__(self):
+    def __init__(self, dim=[1, 1]):
         self.layers = {'input' : None, 'output' : None, 'hidden' : []}
+        # Create our layers
+        self.layers['input'] = NetworkLayer(dim[0])
+        for hidden_layer_neurons in dim[1:-1]:
+            self.layers['hidden'].append(NetworkLayer(hidden_layer_neurons))
+        self.layers['output'] = NetworkLayer(dim[-1])
+        
+        #Connect the layers
+        if self.layers['hidden']:
+            self.layers['input'].connect(self.layers['hidden'][0])
+            #Connect pairs of hidden layers
+            for hidden_from, hidden_to in zip(self.layers['hidden'][:-1], self.layers['hidden'][1:]):
+                hidden_from.connect(hidden_to)
+            self.layers['hidden'][-1].connect(self.layers['output'])
+        else:
+            self.layers['input'].connect(self.layers['output'])
+
     def connect(self, layer_from, layer_to, weights=[[]], from_is_input=False, to_is_output=False):
         layer_from.connect(layer_to, weights)
         if from_is_input and to_is_output:
@@ -25,35 +43,36 @@ class Network:
             print 'No input layer set on the network!'
     def output(self):
         return self.layers['output'].output()
-    def train(self, input_values, truth_values, learn_rate=1):
+    def train(self, input_values, truth_values, learn_rate=1, epochs=100):
         self.set_input(input_values)
         # Calculate change in weights from backpropagation
         # Do the output layer first and work backwards
         t = np.array(truth_values)
-        layer = self.layers['output']
-        while layer.prev_layer and self.layers['input'] != layer.prev_layer:
-            layer = layer.prev_layer
-            o = np.array(layer.output())
-            weights_out = np.array([n.weighted_outputs.values() for n in layer.neurons])
-            if layer != self.layers['output']:
-                d = (o - t)
-            else:
-                d = weights_out.dot(d)
-            d = d * (o * (1 - o))
-            for neuron_to, delta_w in zip(layer.neurons, d):
-                for neuron_from in neuron_to.weighted_inputs.keys():
-                    x = neuron_from.output()
-                    neuron_from.update_weight(neuron_to, learn_rate*delta_w*x, incremental=True)
+        for _ in xrange(epochs):
+            layer = self.layers['output']
+            while layer.prev_layer and self.layers['input'] != layer:
+                o = np.array(layer.output())
+                weights_out = np.array([n.weighted_outputs.values() for n in layer.neurons])
+                deriv = o * (1 - o)
+                if layer is self.layers['output']:
+                    d = (o - t) * deriv
+                else:
+                    d = weights_out.dot(d) * deriv
+                for neuron_to, delta_w in zip(layer.neurons, d):
+                    for neuron_from in neuron_to.weighted_inputs.keys():
+                        x = neuron_from.output()
+                        neuron_from.update_weight(neuron_to, learn_rate*delta_w*x, incremental=True)
+                layer = layer.prev_layer
 
 class NetworkLayer:
     def __init__(self, n_neurons=1):
         self.neurons = [Neuron() for _ in xrange(n_neurons)]
         self.next_layer = None
         self.prev_layer = None
-    def connect(self, layer_to, weights=[[]]):
+    def connect(self, layer_to, weights=[]):
         self.next_layer = layer_to
         layer_to.prev_layer = self
-        for neuron_to, input_weights in izip_longest(layer_to.neurons, weights):
+        for neuron_to, input_weights in izip_longest(layer_to.neurons, weights, fillvalue=[]):
             for neuron_from, weight in izip_longest(self.neurons, input_weights):
                 neuron_from.add_output(neuron_to, weight)
     def set_input(self, input_values):
@@ -87,14 +106,14 @@ class Neuron:
             y = np.sum([neuron.output()*weight for neuron, weight in self.weighted_inputs.iteritems()]) + self.bias
         return self.activate(y)
     def activate(self, x):
-        return sigmoid(x)
+        return 2*sigmoid(x) - 1
     def add_input(self, neuron, weight=None):
         if not weight:
-            weight = np.random.rand()
+            weight = 2*np.random.rand() - 1
         self.weighted_inputs[neuron] = weight
     def add_output(self, neuron, weight=None):
         if not weight:
-            weight = np.random.rand()
+            weight = 2*np.random.rand() - 1
         self.weighted_outputs[neuron] = weight
         neuron.add_input(self, weight)
     def update_weight(self, neuron_to, weight, incremental=False):
