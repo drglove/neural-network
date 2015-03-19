@@ -1,130 +1,103 @@
+# Nick Lange
+# Mar. 19th, 2015
+
 import numpy as np
 from itertools import izip_longest
 
-np.random.seed(10)
+# Based on example from http://www.bogotobogo.com/python/python_Neural_Networks_Backpropagation_for_XOR_using_one_hidden_layer.php
 
 class Network:
-    def __init__(self, dim=[1, 1]):
-        self.layers = {'input' : None, 'output' : None, 'hidden' : []}
-        # Create our layers
-        self.layers['input'] = NetworkLayer(dim[0])
-        for hidden_layer_neurons in dim[1:-1]:
-            self.layers['hidden'].append(NetworkLayer(hidden_layer_neurons))
-        self.layers['output'] = NetworkLayer(dim[-1])
-        
-        #Connect the layers
-        if self.layers['hidden']:
-            self.layers['input'].connect(self.layers['hidden'][0])
-            #Connect pairs of hidden layers
-            for hidden_from, hidden_to in zip(self.layers['hidden'][:-1], self.layers['hidden'][1:]):
-                hidden_from.connect(hidden_to)
-            self.layers['hidden'][-1].connect(self.layers['output'])
-        else:
-            self.layers['input'].connect(self.layers['output'])
+    def __init__(self, *layers):
+        """Initialize the network with the dimensions specified in layers
+        e.g. 4,6,3,2 yiels a network with 4 input neurons, two hidden layers
+        with 6 and 3 neurons each, and 2 output neurons.
+        Each layer is given a bias neuron.
+        Weights are initialized randomly in (-1,1)
+        """
+        # Keep a list of matrices as weights
+        # w^k_ij = weight from ith neuron in layer k-1 to jth neuron in layer k
+        # k = 0,...,numlayers-1
+        self.weights = []
+        # Build the weights as a matrix for each pair of layers
+        for n_prev, n_curr in pairwise(layers):
+            # Weights go from (-1,1)
+            # Add an extra weight for the bias
+            self.weights.append(2*np.random.rand(n_prev + 1, n_curr) - 1)
 
-    def connect(self, layer_from, layer_to, weights=[[]], from_is_input=False, to_is_output=False):
-        layer_from.connect(layer_to, weights)
-        if from_is_input and to_is_output:
-            self.layers['input'] = layer_from
-            self.layers['output'] = layer_to
-        elif from_is_input and not to_is_output:
-            self.layers['input'] = layer_from
-            self.layers['hidden'].append(layer_to)
-        elif not from_is_input and not to_is_output:
-            self.layers['hidden'].append(layer_to)
-            self.layers['hidden'].append(layer_from)
-        elif not from_is_input and to_is_output:
-            self.layers['hidden'].append(layer_from)
-            self.layers['output'] = layer_to
-    def set_input(self, input_values):
-        if self.layers['input']:
-            self.layers['input'].set_input(input_values)
-        else:
-            print 'No input layer set on the network!'
-    def output(self):
-        return self.layers['output'].output()
-    def train(self, input_values, truth_values, learn_rate=1, epochs=100):
-        self.set_input(input_values)
-        # Calculate change in weights from backpropagation
-        # Do the output layer first and work backwards
-        t = np.array(truth_values)
+    def activation(self, x):
+        return tanh(x)
+
+    def activation_deriv(self, x):
+        return tanh_deriv(x)
+
+    def train(self, inputs, outputs, learn_rate=0.1, epochs=1000):
+        """Learn from the input data and its corresponding output.
+        Repeat the learning process epoch times by repeatedly drawing a sample
+        at random from the inputs and then updating the weights.
+        """
         for _ in xrange(epochs):
-            layer = self.layers['output']
-            while layer.prev_layer and self.layers['input'] != layer:
-                o = np.array(layer.output())
-                weights_out = np.array([n.weighted_outputs.values() for n in layer.neurons])
-                deriv = o * (1 - o)
-                if layer is self.layers['output']:
-                    d = (o - t) * deriv
-                else:
-                    d = weights_out.dot(d) * deriv
-                for neuron_to, delta_w in zip(layer.neurons, d):
-                    for neuron_from in neuron_to.weighted_inputs.keys():
-                        x = neuron_from.output()
-                        neuron_from.update_weight(neuron_to, learn_rate*delta_w*x, incremental=True)
-                layer = layer.prev_layer
+            # Pick sample at random
+            sample_index = np.random.randint(inputs.shape[0])
+            sample = inputs[sample_index]
+            activations = self.feedforward(sample)
+            
+            # Build up a list of the deltas for back-propagation
+            # How poor did we do?
+            error = outputs[sample_index] - activations[-1]
+            delta = error*self.activation_deriv(activations[-1])
+            deltas = [delta]
+            for layer in xrange(len(self.weights) - 1, 0, -1):
+                delta = deltas[-1].dot(self.weights[layer].T)*self.activation_deriv(activations[layer])
+                # Remove the delta for the bias node, since it doesn't propagate back
+                delta = np.delete(delta, -1)
+                deltas.append(delta)
 
-class NetworkLayer:
-    def __init__(self, n_neurons=1):
-        self.neurons = [Neuron() for _ in xrange(n_neurons)]
-        self.next_layer = None
-        self.prev_layer = None
-    def connect(self, layer_to, weights=[]):
-        self.next_layer = layer_to
-        layer_to.prev_layer = self
-        for neuron_to, input_weights in izip_longest(layer_to.neurons, weights, fillvalue=[]):
-            for neuron_from, weight in izip_longest(self.neurons, input_weights):
-                neuron_from.add_output(neuron_to, weight)
-    def set_input(self, input_values):
-        for i in xrange(len(self.neurons)):
-            self.neurons[i].set_input(input_values[i])
-    def output(self):
-        return [neuron.output() for neuron in self.neurons]
+            # Reverse the deltas since we built them backwards
+            deltas.reverse()
 
-class Neuron:
-    def __init__(self, name=None, input_value=None):
-        if not name:
-            self.name = Neuron.get_next_name()
-        self.weighted_inputs = {}
-        self.weighted_outputs = {}
-        self.input_value = input_value
-        self.bias = 0.0
-    def __str__(self):
-        return self.name
-    def __repr__(self):
-        return str(self)
-    name = 'a'
-    @staticmethod
-    def get_next_name():
-        curr = Neuron.name
-        Neuron.name = chr(ord(Neuron.name) + 1)
-        return curr
-    def output(self):
-        if self.input_value:
-            y = self.input_value
-        else:
-            y = np.sum([neuron.output()*weight for neuron, weight in self.weighted_inputs.iteritems()]) + self.bias
-        return self.activate(y)
-    def activate(self, x):
-        return 2*sigmoid(x) - 1
-    def add_input(self, neuron, weight=None):
-        if not weight:
-            weight = 2*np.random.rand() - 1
-        self.weighted_inputs[neuron] = weight
-    def add_output(self, neuron, weight=None):
-        if not weight:
-            weight = 2*np.random.rand() - 1
-        self.weighted_outputs[neuron] = weight
-        neuron.add_input(self, weight)
-    def update_weight(self, neuron_to, weight, incremental=False):
-        if not incremental:
-            self.weighted_outputs[neuron_to] = weight
-            neuron_to.weighted_inputs[self] = weight
-        else:
-            self.weighted_outputs[neuron_to] += weight
-            neuron_to.weighted_inputs[self] += weight
-    def set_input(self, input_value):
-        self.input_value = input_value
+            # Do the back-propagation
+            for layer in xrange(len(self.weights)):
+                result = np.atleast_2d(activations[layer])
+                delta = np.atleast_2d(deltas[layer])
+                self.weights[layer] += learn_rate*result.T.dot(delta)
+
+    def feedforward(self, sample):
+        # Keep a list of the outputs at each layer, which for the input layer is trivial
+        activations = [sample]
+            
+        # Feed forward
+        for layer in xrange(len(self.weights)):
+            # Append a 1 for the input to the bias weight
+            activations[layer] = np.append(activations[layer], 1)
+            z = self.weights[layer].T.dot(activations[layer])
+            result = self.activation(z)
+            activations.append(result)
+
+        return activations
+
+    def predict(self, inputs):
+        """Return the ANN's prediction for the given input.
+        """
+        # Get the last feedforward result
+        results = self.feedforward(inputs)
+        return results[-1]
 
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
+
+def sigmoid_deriv(x):
+    return np.exp(x) / np.square(1 + np.exp(x))
+
+def tanh(x):
+    return np.tanh(x)
+
+def tanh_deriv(x):
+    return 1.0 - np.square(np.tanh(x))
+
+# See https://docs.python.org/2/library/itertools.html
+from itertools import tee, izip
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = tee(iterable)
+    next(b, None)
+    return izip(a, b)
